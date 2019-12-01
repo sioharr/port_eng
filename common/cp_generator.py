@@ -41,20 +41,22 @@ class CpGenerator(object):
     def generate_cp(self, date):
         cov = self._rm.load_cov(date)
         univ = self._load_univ_data(date)
-        cov = cov.reindex(univ, axis=0).reindex(univ, axis=1)
-        V = np.matrix(cov.values)
-
         a = self._load_attrib_data(date)
-        a = a.reindex(univ)
+
+        # get the intersection
+        univ_valid = cov.index.intersection(univ).intersection(a.index)
+        cov = cov.reindex(univ_valid, axis=0).reindex(univ_valid, axis=1)
+        V = np.matrix(cov.values)      
+        a = a.reindex(univ_valid)
+
         # winsorize
         a['value'] = winsorize(a['value'], limits=(0.05, 0.05))
         # standardize
         a = (a - a.mean()) / a.std()
-        a.fillna(0, inplace=True)
         a = np.matrix(a)
 
-        # optimization
+        # calculate weights
         V_i = np.linalg.inv(V)
         h = (V_i * a) / (a.T * V_i * a)
-        h = pd.DataFrame(index=univ, data=h, columns=['weight'])
+        h = pd.DataFrame(index=univ_valid, data=h, columns=['weight'])
         return h
