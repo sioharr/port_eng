@@ -1,75 +1,46 @@
 import pandas as pd
 import numpy as np
-from scipy.stats.mstats import winsorize
 from scipy.optimize import minimize
-from .db import create_engine_for_db
-from .risk_model import RiskModel
 
 
-class PortfolioConstructor(object):
-    def __init__(self, univ, alpha, risk_model, engine=None):
-        self.univ = univ
-        self.alpha = alpha
-        
-        self._engine = engine or create_engine_for_db()
-        self._rm = RiskModel(risk_model, self._engine)
+class PortfolioOptimizer(object):
+    def __init__(self):
+        return
 
 
-    def _load_alpha_data(self, date):
-        sql = f'''
-            select id, value
-            from alphas
-            where date = '{date.strftime('%Y%m%d')}'
-            and factor = '{self.attrib}'
+    def _calc_utility_reversed_sign(self, w, alpha, cov, l):
+        '''
+        l: Lagrange multiplier
         '''
 
-        data = pd.read_sql(sql, con=self._engine)
-        data.set_index('id', inplace=True)
-        return data
+        stats = self._calc_stats(w, alpha, cov)
+        port_alpha = stats['alpha']
+        port_variance = stats['var']
+        u = -1 * (port_alpha - l * port_variance)
+        return u
 
 
-    def _load_univ_data(self, date):
-        sql = f'''
-            select slug
-            from benchmark_wt_kaggle
-            where name = '{self.univ}'
-            and date = '{date.strftime('%Y%m%d')}'
-        '''
+    def _calc_stats(self, w, alpha, cov):
 
-        univ = pd.read_sql(sql, con=self._engine)['slug'].to_list()
-        return univ
-
-
-    def load_data(self, date):
-        cov = self._rm.load_cov(date)
-        univ = self._load_univ_data(date)
-        alpha = self._load_alpha_data(date)
-        
-        # get the intersection
-        univ = cov.index.intersection(univ).intersection(alpha.index)
-        cov = cov.reindex(univ, axis=0).reindex(univ, axis=1)
-        V = np.matrix(cov.values)
-        alpha = alpha.reindex(univ)
-
-
-    def clac_port_stats(self, univ, cov, alpha, w):
-        # winsorize
-        alpha['value'] = winsorize(alpha['value'], limits=(0.05, 0.05))
-        # standardize
-        alpha = (alpha - alpha.mean()) / alpha.std()
+        w = w.reshape(-1, 1)
 
         # calculate total alpha
-        port_alpha = (alpha * w).sum()
+        port_alpha = (alpha.values * w).sum()
 
         # calculate portfolio variance
-        port_variance =  w.T * V * w
+        V = np.matrix(cov.values)
+        port_variance =  (w.T * V * w)[0, 0]
+        return {'alpha': port_alpha, 'var': port_variance}
 
-        return port_alpha, port_variance
 
+    def optimize(self, alpha, cov, l, bounds, constraints):
+        '''
+        l: Lagrange multiplier
+        '''
 
-    def mapto_constraints(self, constraints):
-        pass
-
-    def optimze(self):
-        w_init = 1 / len(univ) # equal weight
-        
+        w_init = np.array(len(alpha) * [1 / len(alpha)])  # equal weight
+        opt = minimize(self._calc_utility_reversed_sign, w_init, args=(alpha, cov, l), method='SLSQP', 
+                       bounds=bounds, constraints=constraints, tol=1e-10)
+        w_opt = opt.x
+        stats = self._calc_stats(w_opt, alpha, cov)
+        return w_opt, stats
